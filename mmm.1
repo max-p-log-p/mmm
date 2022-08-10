@@ -1,0 +1,65 @@
+.TH II 1 mmm\-VERSION
+.SH NAME
+mmm  \- minimal Matrix messenger
+.SH DESCRIPTION
+.B mmm
+is a minimal FIFO and filesystem based Matrix client.
+It creates a Matrix directory tree with server, room and
+nick name directories.
+In every directory a FIFO file (in) and normal file (out)
+is placed. This will be for example ~/mmm/matrix.org/.
+The in file is used to communicate with the servers and the out
+files includes the server messages. For every room and every nick
+name there will be new in and out files.
+Communicate with a Matrix server with basic command line tools.
+.SH SYNOPSIS
+.B mmm
+.RB [ \-p
+.IR prefix ]
+.RB [ \-u
+.IR user ]
+.SH OPTIONS
+.TP
+.BI \-p " prefix"
+lets you override the default Matrix path (~/mmm)
+.TP
+.BI \-u " user"
+user_id, for example: @user:matrix.org
+.TP
+.SH DIRECTORIES
+.TP
+.B ~/mmm
+In this directory the Matrix tree will be created. In this directory you
+will find a directory for your server (default: matrix.org) in
+which the FIFO and the output file will be stored.
+If you join a room a new directory with the name of the room
+will be created in the ~/mmm/$servername/ directory.
+.SH COMMANDS
+.TP
+.BI /j " #room/nickname"
+join a room or open private conversation with user
+.TP
+.BI /l " [reason]"
+leave a room or query
+.TP
+.BI /n " nick"
+change the nick name
+.TP
+.BI /q
+quit ii
+.TP
+.BI /t " topic"
+set the topic of a room
+.SH RAW COMMANDS
+.LP
+Everything which is not a command will be sent into the room or to the server.
+.SH CONTACT
+.LP
+Write to sel4 (at) disroot (dot) org
+.SH AUTHORS
+mmm engineers, see LICENSE file
+.SH SEE ALSO
+.BR echo (1),
+.BR tail (1)
+.SH BUGS
+Please report them!
