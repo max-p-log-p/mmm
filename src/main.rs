@@ -1,4 +1,4 @@
-use std::{env, fs, io, io::Write, path::PathBuf};
+use std::{collections::HashMap, env, fs, io, io::Write, path::PathBuf, thread};
 use termios::*;
 use matrix_sdk::{
 	Client, ClientConfig,
@@ -12,14 +12,14 @@ use matrix_sdk::{
 			sync::sync_events::Filter,
 		},
 		events::{
+			AnyMessageEventContent,
 			SyncMessageEvent, 
 			room::message::{
 				MessageEventContent, MessageType, 
 				TextMessageEventContent, ImageMessageEventContent,
 			},
 		},
-		MilliSecondsSinceUnixEpoch,
-		UserId
+		RoomId, UserId
 	},
 	SyncSettings,
 };
@@ -48,8 +48,6 @@ async fn main() {
 		env::home_dir().expect("no home directory")
 	};
 	path.push("mmm/");
-	/* TODO: chroot */
-	path.push(user_id.server_name().as_str());
 	fs::create_dir_all(&path);
 	path.push("config");
 	let client_config = ClientConfig::new().store_path(&path);
@@ -62,8 +60,8 @@ async fn main() {
 	tcsetattr(0, TCSANOW, &termios);
 
 	/* TODO: zeroize password after login */
-	let mut pass = String::new();
 	while !client.logged_in().await {
+		let mut pass = String::new();
 		print!("Password: ");
 		io::stdout().flush();
 		io::stdin().read_line(&mut pass);
@@ -87,26 +85,37 @@ async fn main() {
 	client.register_event_handler(on_room_msg).await;
 	client.sync_once(sync_settings).await.unwrap();
 
-	// '/' -> '\' to stop DIRECTORY TRAVERSAL
-	// FAILS on WINDOWS
+	let mut name_to_room = HashMap::new();
+
 	for room in client.joined_rooms() {
-		match room.display_name().await {
-			Ok(name) => {
-				path.pop();
-				path.push(name.replace("/", "\\"));
-			},
-			Err(e) => println!("No display name: {e}"),
-		};
-		fs::create_dir_all(&path);
-		/* get messages */
+		if let Ok(name) = room.display_name().await {
+			name_to_room.insert(name, Room::Joined(room.clone()));
+		}
 	}
+	
+	println!("Spawning thread");
+	tokio::spawn(async { read_and_send(name_to_room).await });
+	println!("Thread spawned");
 
 	let settings = SyncSettings::default().token(client.sync_token().await.unwrap());
 	client.sync(settings).await;
 }
 
+async fn read_and_send(name_to_room: HashMap<String, Room>) {
+	loop {
+		print!("> "); 
+		io::stdout().flush();
+		let mut line = String::new();
+		io::stdin().read_line(&mut line);
+		let mut split = line.splitn(2, "|");
+		if let Some(Room::Joined(room)) = name_to_room.get(split.next().unwrap()) {
+			let content = AnyMessageEventContent::RoomMessage(MessageEventContent::text_plain(split.next().unwrap()));
+			room.send(content, None).await.unwrap();
+		}
+	}
+}
+
 async fn on_room_msg(ev: SyncMessageEvent<MessageEventContent>, room: Room) {
-	/* ignore invited rooms */
 	if room.room_type() != RoomType::Joined {
 		return;
 	}
@@ -120,7 +129,5 @@ async fn on_room_msg(ev: SyncMessageEvent<MessageEventContent>, room: Room) {
 		_ => return,
 	};
 
-	if let MilliSecondsSinceUnixEpoch(time) = ev.origin_server_ts {
-		println!("{time} {}: {content}", ev.sender.localpart());
-	}
+	println!("{} {} {} {content}", ev.origin_server_ts.get(), room.display_name().await.unwrap(), ev.sender.localpart());
 }
