@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 termios = "0.3.3"
-tokio = { version = "1.20.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.20.1", default-features = false, features = ["macros", "rt-multi-thread"] }
 matrix-sdk = {version = "0.4.1", default-features = false, features = ["encryption", "rustls-tls"]}
 matrix-sdk-base = {version = "0.4.1", default-features = false, features = ["encryption"]}

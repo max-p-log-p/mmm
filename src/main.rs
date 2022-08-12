@@ -1,7 +1,7 @@
-use std::{collections::HashMap, env, fs, io, io::Write, path::PathBuf, thread};
+use std::{collections::HashMap, env, io, io::BufRead, io::Write};
 use termios::*;
 use matrix_sdk::{
-	Client, ClientConfig,
+	Client,
 	room::Room,
 	ruma::{
 		api::client::r0::{
@@ -9,17 +9,18 @@ use matrix_sdk::{
 			    FilterDefinition, LazyLoadOptions, 
 			    RoomEventFilter,
 			},
+			message::get_message_events::Request,
 			sync::sync_events::Filter,
 		},
 		events::{
-			AnyMessageEventContent,
-			SyncMessageEvent, 
+			AnyMessageEventContent, AnyMessageEvent::RoomMessage, 
+			AnyRoomEvent, SyncMessageEvent, 
 			room::message::{
 				MessageEventContent, MessageType, 
 				TextMessageEventContent, ImageMessageEventContent,
 			},
 		},
-		RoomId, UserId
+		UserId
 	},
 	SyncSettings,
 };
@@ -33,7 +34,7 @@ async fn main() {
 	let args: Vec<String> = env::args().collect(); 
 
 	if args.len() < 2 {
-		panic!("usage: mmm user [prefix]");
+		panic!("usage: mmm user");
 	}
 
 	let user_id = match UserId::try_from(args[1].clone()) { 
@@ -41,17 +42,7 @@ async fn main() {
 		Err(e) => panic!("Bad user_id: {e}"),
 	};
 
-	/* configure client */
-	let mut path: PathBuf = if args.len() >= 3 {
-		PathBuf::from(args[2].clone())
-	} else {
-		env::home_dir().expect("no home directory")
-	};
-	path.push("mmm/");
-	fs::create_dir_all(&path);
-	path.push("config");
-	let client_config = ClientConfig::new().store_path(&path);
-	let client = Client::new_from_user_id_with_config(user_id.clone(), client_config).await.unwrap();
+	let client = Client::new_from_user_id(user_id.clone()).await.unwrap();
 
 	/* disable echo */
 	let mut termios = Termios::from_fd(0).unwrap();
@@ -61,12 +52,11 @@ async fn main() {
 
 	/* TODO: zeroize password after login */
 	while !client.logged_in().await {
-		let mut pass = String::new();
 		print!("Password: ");
 		io::stdout().flush();
-		io::stdin().read_line(&mut pass);
+		let pass = io::stdin().lock().lines().next().unwrap().unwrap();
 		println!("");
-		client.login(user_id.localpart(), pass.trim_end(), None, None).await;
+		client.login(user_id.localpart(), &pass, None, None).await;
 	}
 
 	/* enable echo */
@@ -85,34 +75,61 @@ async fn main() {
 	client.register_event_handler(on_room_msg).await;
 	client.sync_once(sync_settings).await.unwrap();
 
+	/* cache joined rooms */
 	let mut name_to_room = HashMap::new();
-
 	for room in client.joined_rooms() {
 		if let Ok(name) = room.display_name().await {
 			name_to_room.insert(name, Room::Joined(room.clone()));
 		}
 	}
 	
-	println!("Spawning thread");
-	tokio::spawn(async { read_and_send(name_to_room).await });
-	println!("Thread spawned");
-
-	let settings = SyncSettings::default().token(client.sync_token().await.unwrap());
+	let sync_token = client.sync_token().await.unwrap();
+	let settings = SyncSettings::default().token(sync_token.clone());
+	tokio::spawn(async move { shell(name_to_room, &sync_token).await });
 	client.sync(settings).await;
 }
 
-async fn read_and_send(name_to_room: HashMap<String, Room>) {
+async fn shell(name_to_room: HashMap<String, Room>, sync_token: &str) {
+	let mut name = String::new();
 	loop {
-		print!("> "); 
+		let mut send = true;
+		print!("{name}> "); 
 		io::stdout().flush();
-		let mut line = String::new();
-		io::stdin().read_line(&mut line);
-		let mut split = line.splitn(2, "|");
-		if let Some(Room::Joined(room)) = name_to_room.get(split.next().unwrap()) {
-			let content = AnyMessageEventContent::RoomMessage(MessageEventContent::text_plain(split.next().unwrap()));
-			room.send(content, None).await.unwrap();
+		let cmd = io::stdin().lock().lines().next().unwrap().unwrap();
+		if cmd.chars().next().unwrap() == '/' {
+			name = cmd[1..].to_string().clone();
+			send = false;
 		}
+
+		if let Some(Room::Joined(room)) = name_to_room.get(&name) {
+			if send {
+				let content = AnyMessageEventContent::RoomMessage(MessageEventContent::text_plain(cmd));
+				room.send(content, None).await.unwrap();
+			} else {
+				let request = Request::backward(&room.room_id(), sync_token);
+				for chunk in room.messages(request).await.unwrap().chunk {
+					if let AnyRoomEvent::Message(msg) = chunk.deserialize().unwrap() {
+						let time = msg.origin_server_ts().get();
+						if let RoomMessage(event) = msg.clone() {
+							let body = parse_message_event_content(&event.content);
+							println!("{:?} {name} {} {body}", time, msg.sender());
+						};
+					};
+				}
+			}
+		};
 	}
+}
+
+fn parse_message_event_content(content: &MessageEventContent) -> String {
+	/* TODO: image, video, file, audio */
+	return match content.msgtype.clone() {
+		MessageType::Text(TextMessageEventContent { body: _body, .. }) => _body,
+		MessageType::Image(ImageMessageEventContent { body: _body, url: Some(_url), .. }) => {
+			format!("{_body}({_url})")
+		},
+		_ => String::new(),
+	};
 }
 
 async fn on_room_msg(ev: SyncMessageEvent<MessageEventContent>, room: Room) {
@@ -120,14 +137,7 @@ async fn on_room_msg(ev: SyncMessageEvent<MessageEventContent>, room: Room) {
 		return;
 	}
 
-	/* TODO: image, video, file, audio */
-	let content = match ev.content.msgtype {
-		MessageType::Text(TextMessageEventContent { body: _body, .. }) => _body,
-		MessageType::Image(ImageMessageEventContent { body: _body, url: Some(_url), .. }) => {
-			format!("{_body}({_url})")
-		},
-		_ => return,
-	};
+	let body = parse_message_event_content(&ev.content);
 
-	println!("{} {} {} {content}", ev.origin_server_ts.get(), room.display_name().await.unwrap(), ev.sender.localpart());
+	println!("{} {} {} {body}", ev.origin_server_ts.get(), room.display_name().await.unwrap(), ev.sender.localpart());
 }
