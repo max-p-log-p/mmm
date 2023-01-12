@@ -17,7 +17,7 @@ use matrix_sdk::{
     },
     Client, SyncSettings,
 };
-use std::{collections::HashMap, env, io, io::BufRead, io::Write};
+use std::{collections::HashMap, env, io, io::BufRead, io::Write, process};
 use termios::*;
 
 use matrix_sdk_base::RoomType;
@@ -27,12 +27,16 @@ async fn main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        panic!("usage: mmm user");
+        println!("usage: mmm user");
+        process::exit(1);
     }
 
     let user_id = match UserId::try_from(args[1].clone()) {
         Ok(user_id) => user_id,
-        Err(e) => panic!("Bad user_id: {e}"),
+        Err(e) => { 
+            println!("Bad user_id: {e}");
+            process::exit(1);
+        },
     };
 
     let client = Client::new_from_user_id(user_id.clone()).await.unwrap();
