@@ -67,7 +67,8 @@ async fn main() {
         include_redundant_members: true,
     };
     filter.room.state = event_filter;
-    let sync_settings = SyncSettings::new().filter(Filter::FilterDefinition(filter));
+    let new_filter = Filter::FilterDefinition(filter);
+    let sync_settings = SyncSettings::new().filter(new_filter);
 
     client.register_event_handler(on_room_msg).await;
     client.sync_once(sync_settings).await.unwrap();
@@ -100,17 +101,20 @@ async fn shell(name_to_room: HashMap<String, Room>, sync_token: &str) {
 
         if let Some(Room::Joined(room)) = name_to_room.get(&name) {
             if send {
-                let content =
-                    AnyMessageEventContent::RoomMessage(MessageEventContent::text_plain(cmd));
+                let msg = MessageEventContent::text_plain(cmd);
+                let content = AnyMessageEventContent::RoomMessage(msg);
                 room.send(content, None).await.unwrap();
             } else {
                 let request = Request::backward(&room.room_id(), sync_token);
                 for chunk in room.messages(request).await.unwrap().chunk {
-                    if let AnyRoomEvent::Message(msg) = chunk.deserialize().unwrap() {
+                    let chunk = chunk.deserialize();
+                    if let AnyRoomEvent::Message(msg) = chunk.unwrap() {
                         let time = msg.origin_server_ts().get();
                         if let RoomMessage(event) = msg.clone() {
-                            let body = parse_message_event_content(&event.content);
-                            println!("{:?} {name} {} {body}", time, msg.sender());
+                            let content = event.content;
+                            let sender = msg.sender();
+                            let body = parse_message_event_content(&content);
+                            println!("{:?} {name} {} {body}", time, sender);
                         };
                     };
                 }
