@@ -91,9 +91,22 @@ async fn shell(name_to_room: HashMap<String, Room>, sync_token: &str) {
     let mut name = String::new();
     loop {
         let mut send = true;
+
         print!("{name}> ");
         io::stdout().flush();
-        let cmd = io::stdin().lock().lines().next().unwrap().unwrap();
+
+        let cmd = match io::stdin().lock().lines().next() {
+            Some(result) => match result {
+                Ok(s) => s,
+                Err(e) => String::new(),
+            },
+            None => String::new(),
+        };
+
+        if cmd.len() <= 0 {
+            continue;
+        }
+
         if cmd.chars().next().unwrap() == '/' {
             name = cmd[1..].to_string().clone();
             send = false;
